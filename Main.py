@@ -5,11 +5,21 @@ import base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from ultralytics import YOLO
 from supabase import create_client, Client
+from dotenv import load_dotenv # <-- Importamos dotenv para leer archivos .env
 
-# --- 1. Configuración de Supabase ---
-SUPABASE_URL = "https://oqooqpjvqsudxjffwkqa.supabase.co"
-# Usamos os.getenv para leer la clave desde Render, con un valor por defecto para pruebas locales
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "TU_SERVICE_ROLE_KEY_AQUI") 
+# Cargar las variables ocultas del archivo .env al sistema (solo funciona en tu equipo local)
+load_dotenv()
+
+# --- 1. Configuración Segura de Supabase ---
+SUPABASE_URL = "https://mfpuvlmqvnesxwxgjpcu.supabase.co"
+
+# Leemos la llave secreta desde el entorno del sistema (sea de Render o del .env)
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+
+# Bloque de seguridad estricto: Si la llave no existe, el programa se detiene y te avisa.
+if not SUPABASE_KEY:
+    raise ValueError("🚨 ERROR CRÍTICO: No se encontró la variable de entorno SUPABASE_SERVICE_KEY. Verifica tu archivo .env local o las variables en el panel de Render.")
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
