@@ -4,3 +4,4 @@ websockets
 ultralytics
 opencv-python-headless
 numpy
+supabase 

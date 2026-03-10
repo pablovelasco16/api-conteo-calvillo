@@ -1,17 +1,40 @@
-# main.py
-# Instalar: pip install fastapi uvicorn ultralytics opencv-python-headless numpy
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from ultralytics import YOLO
+import os
 import cv2
 import numpy as np
 import base64
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from ultralytics import YOLO
+from supabase import create_client, Client
+
+# --- 1. Configuración de Supabase ---
+SUPABASE_URL = "https://oqooqpjvqsudxjffwkqa.supabase.co"
+# Usamos os.getenv para leer la clave desde Render, con un valor por defecto para pruebas locales
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "TU_SERVICE_ROLE_KEY_AQUI") 
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
-
-# Cargar el modelo al iniciar el servidor
 model = YOLO('yolov8n.pt')
 
+# --- 2. Función de Inserción ---
+def enviar_conteo_a_supabase(punto_id, entradas, salidas, precision, modelo_ver):
+    try:
+        data = {
+            "punto_id": punto_id,
+            "entradas": entradas,
+            "salidas": salidas,
+            "total_momento": entradas - salidas,
+            "metadata_ia": {
+                "confianza": precision,
+                "version": modelo_ver,
+                "motor": "YOLOv8"
+            }
+        }
+        response = supabase.table("registros_conteo").insert(data).execute()
+        print(f"✅ Registro en Supabase exitoso: ID {response.data[0]['id']}")
+    except Exception as e:
+        print(f"❌ Error al conectar con Supabase: {e}")
+
+# --- 3. Lógica del WebSocket y Visión ---
 @app.websocket("/ws/conteo")
 async def websocket_conteo(websocket: WebSocket):
     await websocket.accept()
@@ -21,10 +44,7 @@ async def websocket_conteo(websocket: WebSocket):
 
     try:
         while True:
-            # 1. Recibir el frame desde la App (formato Base64)
             data = await websocket.receive_text()
-            
-            # Decodificar la imagen de Base64 a un formato que OpenCV entienda
             encoded_data = data.split(',')[1] if ',' in data else data
             nparr = np.frombuffer(base64.b64decode(encoded_data), np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -32,10 +52,7 @@ async def websocket_conteo(websocket: WebSocket):
             if frame is None:
                 continue
 
-            # 2. Procesar con YOLO
             results = model.track(frame, persist=True, classes=[0], tracker="bytetrack.yaml", verbose=False)
-            
-            # Configurar la línea virtual dinámicamente según el tamaño del video que mande el celular
             height, width, _ = frame.shape
             line_y = int(height / 2)
             cv2.line(frame, (0, line_y), (width, line_y), (255, 0, 0), 2)
@@ -43,29 +60,35 @@ async def websocket_conteo(websocket: WebSocket):
             if results[0].boxes.id is not None:
                 boxes = results[0].boxes.xyxy.cpu()
                 track_ids = results[0].boxes.id.int().cpu().tolist()
+                # Extraemos la confianza (precision) de cada detección
+                confidences = results[0].boxes.conf.cpu().tolist() 
 
-                for box, track_id in zip(boxes, track_ids):
+                for box, track_id, conf in zip(boxes, track_ids, confidences):
                     x1, y1, x2, y2 = map(int, box)
                     cy = int((y1 + y2) / 2)
 
-                    # Dibujar en el frame
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(frame, f"ID: {track_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-                    # Lógica de conteo
+                    # --- EL MOMENTO EXACTO DEL CONTEO ---
                     if cy > line_y and track_id not in counted_ids:
                         counted_ids.add(track_id)
                         total_tourists += 1
                         cv2.line(frame, (0, line_y), (width, line_y), (0, 255, 0), 5)
+                        
+                        # Disparamos la función hacia Supabase
+                        enviar_conteo_a_supabase(
+                            punto_id="Plaza_Principal_Calvillo", 
+                            entradas=1, 
+                            salidas=0, 
+                            precision=round(conf, 2), # Redondeamos la confianza a 2 decimales
+                            modelo_ver="YOLOv8n"
+                        )
 
-            # Escribir el total
             cv2.putText(frame, f"Turistas: {total_tourists}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
-            # 3. Codificar la imagen procesada de vuelta a Base64
             _, buffer = cv2.imencode('.jpg', frame)
             procesado_base64 = base64.b64encode(buffer).decode('utf-8')
-
-            # 4. Enviar el frame dibujado de regreso a la App
             await websocket.send_text(f"data:image/jpeg;base64,{procesado_base64}")
 
     except WebSocketDisconnect:
