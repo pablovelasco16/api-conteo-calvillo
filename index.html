@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visor de Conteo - Calvillo</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background-color: #f4f4f9; }
+        #videoElement { display: none; } /* Ocultamos el video crudo original */
+        #processedImage { border: 4px solid #333; border-radius: 8px; max-width: 100%; height: auto; }
+        .container { margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+    <h1>Monitoreo Turístico en Tiempo Real</h1>
+    <p>Conectando con la IA mediante WebSockets...</p>
+
+    <div class="container">
+        <video id="videoElement" autoplay></video>
+        <canvas id="canvasElement" style="display:none;"></canvas>
+        <img id="processedImage" alt="Esperando video procesado..." />
+    </div>
+
+    <script>
+        const video = document.getElementById('videoElement');
+        const canvas = document.getElementById('canvasElement');
+        const ctx = canvas.getContext('2d');
+        const processedImage = document.getElementById('processedImage');
+
+        // 1. Conectar al WebSocket del servidor FastAPI
+        const ws = new WebSocket('ws://localhost:8000/ws/conteo');
+
+        // 2. Encender la cámara web del dispositivo
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => {
+                video.srcObject = stream;
+            })
+            .catch(err => console.error("Error al acceder a la cámara:", err));
+
+        // 3. Cuando el WebSocket se abra, empezar a enviar frames
+        ws.onopen = () => {
+            console.log("Conectado al servidor de IA");
+            
+            setInterval(() => {
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    // Dibujar el video en el canvas
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    
+                    // Extraer la imagen en formato Base64 (muy comprimido)
+                    const imageData = canvas.toDataURL('image/jpeg', 0.5);
+                    
+                    // Enviar al servidor
+                    ws.send(imageData);
+                }
+            }, 100); // 100ms = ~10 frames por segundo (Ajustable para optimizar rendimiento)
+        };
+
+        // 4. Recibir el frame procesado desde FastAPI y mostrarlo
+        ws.onmessage = (event) => {
+            processedImage.src = event.data;
+        };
+
+        ws.onclose = () => console.log("Desconectado del servidor");
+    </script>
+
+</body>
+</html>
